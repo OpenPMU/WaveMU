@@ -21,8 +21,6 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-
-from __future__ import print_function
 import os
 import time
 from datetime import datetime, timedelta
@@ -30,7 +28,6 @@ import numpy as np
 import socket
 from lxml import etree
 import base64
-from PyQt5.QtCore import QThread
 import soundfile as sf
 
 SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -46,9 +43,8 @@ dictTypeConvert = lambda key: {'Frame': str,
                                }.get(key, lambda x: x)
 
 
-class WaveMU(QThread):
+class WaveMU():
     def __init__(self, waveFilePath, channels=2, ip="127.0.0.1", port=48001):
-        QThread.__init__(self, )
 
         self.waveFilePath = waveFilePath
         self.channels = channels
@@ -64,6 +60,8 @@ class WaveMU(QThread):
 
         self.stopThread = False
         self.xmlTemplate = etree.parse(os.path.join(SCRIPT_DIRECTORY, "OpenPMU_SV.xml"))
+        
+        print("Length of file: ", self.getLength(), "seconds")
 
     def run(self):
         self.stopThread = False
@@ -84,7 +82,14 @@ class WaveMU(QThread):
         # time information for cos function
         intervalDelta = timedelta(seconds=self.interval)
         
+        print(intervalDelta)
+        
         SVgen = self.readWaveFileGen(self.waveFilePath)
+        
+        # Hold off until top of second (check for rollover)
+        startTime = datetime.now()
+        while startTime.second == datetime.now().second:
+            time.sleep(0.0001)
         
         while not self.stopThread:
             now = datetime.now()
@@ -108,13 +113,21 @@ class WaveMU(QThread):
             socketOut.sendto(xml, (self.ip, self.port))
             socketFwd.sendto(xml, ("127.0.0.1", 48005))    
             
+            elapsedTime = round((datetime.now() - timeStart).total_seconds(), 3)
+            
             frame += 1
             if (frame == int(1 / self.interval)):
                 frame = 0
+                print('.')
+                print(elapsedTime, ' ', end='', flush=True)
+            else:
+                print('.', end='', flush=True)
 
             # delay some time, this is not accurate
             s = (intervalDelta - (datetime.now() - now)).total_seconds()
-            print((datetime.now() - timeStart).total_seconds())
+            # print("sleep - ", s)
+            # print(frame)
+            # print(round((datetime.now() - timeStart).total_seconds(), 3))
             time.sleep(s if s > 0 else 0)
 
     def stop(self):
@@ -144,16 +157,28 @@ class WaveMU(QThread):
         xml = etree.tostring(level0, encoding="utf-8")
         return xml
     
+    # Generator for reading wavefile. Returns next block of sampled values each call.
     def readWaveFileGen(self, waveFilePath):
         
         for block in sf.blocks(waveFilePath, blocksize=128, overlap=0, dtype='int16'):
             yield block.T.byteswap()
+            
+    # Calculate the length of the wavefile in seconds    
+    def getLength(self):
+       
+        with sf.SoundFile(self.waveFilePath) as wf:
+            try:
+                length = wf.frames / wf.samplerate    
+            except Exception as e:
+                print(e)      
+                
+        return length 
 
 
 if __name__ == "__main__":
     
     waveFilePath = "example.flac"
     
-    NewWaveMU = WaveMU(waveFilePath)
+    NewWaveMU = WaveMU(waveFilePath, ip="127.0.0.1", port=48001)
     NewWaveMU.run()
 
